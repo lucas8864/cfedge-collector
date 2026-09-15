@@ -1,125 +1,117 @@
 {
-  "generated_at": "2026-09-15T09:00:25.027030+00:00",
-  "total": 513,
+  "generated_at": "2026-09-15T09:10:03.808435+00:00",
+  "elapsed": 14.55,
+  "total": 245,
   "ipv4": 210,
-  "ipv6": 33,
-  "domains": 270,
-  "score": {
-    "gte_80": 6,
-    "gte_60": 15
-  },
-  "quality": {
-    "latency_lte_100": 16,
-    "latency_lte_200": 55,
-    "speed_gte_50": 45,
-    "speed_gte_100": 45
-  },
+  "ipv6": 35,
+  "domains": 0,
+  "measured_latency": 50,
+  "measured_speed": 45,
   "sources": {
     "vvhan": {
       "status": "ok",
-      "type": "vvhan",
-      "url": "https://api.4ce.cn/api/bestCFIP",
       "records": 60,
-      "elapsed": 0.31
+      "domains": 0,
+      "elapsed": 0.44,
+      "error": null
     },
     "nirevil_v4": {
       "status": "ok",
-      "type": "nirevil",
-      "url": "https://raw.githubusercontent.com/NiREvil/vless/refs/heads/main/sub/Cf-ipv4.json",
       "records": 35,
-      "elapsed": 0.15
+      "domains": 0,
+      "elapsed": 0.17,
+      "error": null
     },
     "nirevil_v6": {
       "status": "ok",
-      "type": "nirevil",
-      "url": "https://raw.githubusercontent.com/NiREvil/vless/refs/heads/main/sub/Cf-ipv6.json",
       "records": 5,
-      "elapsed": 0.15
+      "domains": 0,
+      "elapsed": 0.09,
+      "error": null
     },
     "mingyu_v4": {
       "status": "ok",
-      "type": "plain_ip",
-      "url": "https://raw.githubusercontent.com/ymyuuu/IPDB/refs/heads/main/BestCF/bestcfv4.txt",
       "records": 10,
-      "elapsed": 0.11
+      "domains": 0,
+      "elapsed": 0.02,
+      "error": null
     },
     "mingyu_v6": {
       "status": "ok",
-      "type": "plain_ip",
-      "url": "https://raw.githubusercontent.com/ymyuuu/IPDB/refs/heads/main/BestCF/bestcfv6.txt",
-      "records": 8,
-      "elapsed": 0.85
+      "records": 10,
+      "domains": 0,
+      "elapsed": 0.02,
+      "error": null
     },
     "gslege_speed": {
       "status": "ok",
-      "type": "gslege",
-      "url": "https://raw.githubusercontent.com/gslege/CloudflareIP/refs/heads/main/Cfxyz.txt",
       "records": 1,
-      "elapsed": 0.15
+      "domains": 0,
+      "elapsed": 0.12,
+      "error": null
     },
     "gslege_jp": {
       "status": "ok",
-      "type": "gslege",
-      "url": "https://raw.githubusercontent.com/gslege/CloudflareIP/refs/heads/main/JP.txt",
       "records": 19,
-      "elapsed": 0.14
+      "domains": 0,
+      "elapsed": 0.09,
+      "error": null
     },
     "gslege_nl": {
       "status": "ok",
-      "type": "gslege",
-      "url": "https://raw.githubusercontent.com/gslege/CloudflareIP/refs/heads/main/NL.txt",
       "records": 18,
-      "elapsed": 0.14
+      "domains": 0,
+      "elapsed": 0.14,
+      "error": null
     },
     "gslege_us": {
       "status": "ok",
-      "type": "gslege",
-      "url": "https://raw.githubusercontent.com/gslege/CloudflareIP/refs/heads/main/US.txt",
       "records": 20,
-      "elapsed": 0.11
+      "domains": 0,
+      "elapsed": 0.25,
+      "error": null
     },
     "gslege_de": {
       "status": "ok",
-      "type": "gslege",
-      "url": "https://raw.githubusercontent.com/gslege/CloudflareIP/refs/heads/main/DE.txt",
       "records": 20,
-      "elapsed": 0.13
+      "domains": 0,
+      "elapsed": 0.11,
+      "error": null
     },
     "gslege_sg": {
       "status": "ok",
-      "type": "gslege",
-      "url": "https://raw.githubusercontent.com/gslege/CloudflareIP/refs/heads/main/SG.txt",
       "records": 20,
-      "elapsed": 0.11
+      "domains": 0,
+      "elapsed": 0.11,
+      "error": null
     },
     "zhixuanwang": {
       "status": "ok",
-      "type": "zhixuanwang",
-      "url": "https://raw.githubusercontent.com/ZhiXuanWang/cf-speed-dns/refs/heads/main/ipTop10.html",
       "records": 1,
-      "elapsed": 0.13
+      "domains": 0,
+      "elapsed": 0.1,
+      "error": null
     },
     "vps789": {
-      "status": "ok",
-      "type": "vps789",
-      "url": "https://vps789.com/cfip/?remarks=domain",
-      "records": 262,
-      "elapsed": 3.99
+      "status": "error",
+      "records": 0,
+      "domains": 0,
+      "elapsed": 0.29,
+      "error": "HTTPError: 404 Client Error:  for url: https://vps789.com/cfip/?remarks=domain"
     },
     "xinyitang": {
-      "status": "error",
-      "type": "xinyitang",
-      "url": "https://sub.xinyitang.dpdns.org/sub?host=123&uuid=456",
+      "status": "ok",
       "records": 0,
-      "error": "HTTPSConnectionPool(host='sub.xinyitang.dpdns.org', port=443): Max retries exceeded with url: /sub?host=123&uuid=456 (Caused by NameResolutionError(\"HTTPSConnection(host='sub.xinyitang.dpdns.org', port=443): Failed to resolve 'sub.xinyitang.dpdns.org' ([Errno -3] Temporary failure in name resolution)\"))",
-      "elapsed": 10.02
+      "domains": 0,
+      "elapsed": 10.02,
+      "error": null
     },
     "tiancheng": {
       "status": "ok",
-      "type": "tiancheng",
-      "url": "https://cm.soso.edu.kg/sub?host=123&uuid=456",
-      "records": 51,
-      "elapsed": 2.05
+      "records": 41,
+      "domains": 0,
+      "elapsed": 2.55,
+      "error": null
     }
   }
 }

@@ -1,48 +1,125 @@
 {
-  "generated_at": "2026-09-15T05:19:23Z",
-  "total": 222,
-  "ipv4": 207,
-  "ipv6": 15,
-  "domains": 0,
-  "sources": {
-    "nirevil_v6": 5,
-    "nirevil_v4": 35,
-    "mingyu_v4": 10,
-    "mingyu_v6": 10,
-    "gslege_cn": 2,
-    "gslege_jp": 19,
-    "gslege_nl": 18,
-    "gslege_us": 20,
-    "gslege_de": 20,
-    "gslege_sg": 20,
-    "zhixuanwang": 1,
-    "wetest": 15,
-    "tiancheng": 47
-  },
-  "regions": {
-    "HK": 14,
-    "TW": 1,
-    "JP": 28,
-    "SG": 30,
-    "KR": 8,
-    "US": 75,
-    "DE": 20,
-    "NL": 18,
-    "UK": 0,
-    "FR": 0,
-    "AU": 0
-  },
-  "isp": {
-    "CM": 0,
-    "CU": 0,
-    "CT": 0
+  "generated_at": "2026-09-15T08:29:43.584036+00:00",
+  "total": 511,
+  "ipv4": 209,
+  "ipv6": 32,
+  "domains": 270,
+  "score": {
+    "gte_80": 6,
+    "gte_60": 15
   },
   "quality": {
-    "latency100": 5,
-    "latency200": 40,
-    "speed50": 0,
-    "speed100": 0,
-    "score80": 0,
-    "score60": 0
+    "latency_lte_100": 17,
+    "latency_lte_200": 55,
+    "speed_gte_50": 43,
+    "speed_gte_100": 43
+  },
+  "sources": {
+    "vvhan": {
+      "status": "ok",
+      "type": "vvhan",
+      "url": "https://api.4ce.cn/api/bestCFIP",
+      "records": 60,
+      "elapsed": 0.42
+    },
+    "nirevil_v4": {
+      "status": "ok",
+      "type": "nirevil",
+      "url": "https://raw.githubusercontent.com/NiREvil/vless/refs/heads/main/sub/Cf-ipv4.json",
+      "records": 35,
+      "elapsed": 0.1
+    },
+    "nirevil_v6": {
+      "status": "ok",
+      "type": "nirevil",
+      "url": "https://raw.githubusercontent.com/NiREvil/vless/refs/heads/main/sub/Cf-ipv6.json",
+      "records": 5,
+      "elapsed": 0.07
+    },
+    "mingyu_v4": {
+      "status": "ok",
+      "type": "plain_ip",
+      "url": "https://raw.githubusercontent.com/ymyuuu/IPDB/refs/heads/main/BestCF/bestcfv4.txt",
+      "records": 10,
+      "elapsed": 0.06
+    },
+    "mingyu_v6": {
+      "status": "ok",
+      "type": "plain_ip",
+      "url": "https://raw.githubusercontent.com/ymyuuu/IPDB/refs/heads/main/BestCF/bestcfv6.txt",
+      "records": 8,
+      "elapsed": 0.07
+    },
+    "gslege_speed": {
+      "status": "ok",
+      "type": "gslege",
+      "url": "https://raw.githubusercontent.com/gslege/CloudflareIP/refs/heads/main/Cfxyz.txt",
+      "records": 1,
+      "elapsed": 0.05
+    },
+    "gslege_jp": {
+      "status": "ok",
+      "type": "gslege",
+      "url": "https://raw.githubusercontent.com/gslege/CloudflareIP/refs/heads/main/JP.txt",
+      "records": 19,
+      "elapsed": 0.07
+    },
+    "gslege_nl": {
+      "status": "ok",
+      "type": "gslege",
+      "url": "https://raw.githubusercontent.com/gslege/CloudflareIP/refs/heads/main/NL.txt",
+      "records": 18,
+      "elapsed": 0.09
+    },
+    "gslege_us": {
+      "status": "ok",
+      "type": "gslege",
+      "url": "https://raw.githubusercontent.com/gslege/CloudflareIP/refs/heads/main/US.txt",
+      "records": 20,
+      "elapsed": 0.07
+    },
+    "gslege_de": {
+      "status": "ok",
+      "type": "gslege",
+      "url": "https://raw.githubusercontent.com/gslege/CloudflareIP/refs/heads/main/DE.txt",
+      "records": 20,
+      "elapsed": 0.08
+    },
+    "gslege_sg": {
+      "status": "ok",
+      "type": "gslege",
+      "url": "https://raw.githubusercontent.com/gslege/CloudflareIP/refs/heads/main/SG.txt",
+      "records": 20,
+      "elapsed": 0.08
+    },
+    "zhixuanwang": {
+      "status": "ok",
+      "type": "zhixuanwang",
+      "url": "https://raw.githubusercontent.com/ZhiXuanWang/cf-speed-dns/refs/heads/main/ipTop10.html",
+      "records": 1,
+      "elapsed": 0.07
+    },
+    "vps789": {
+      "status": "ok",
+      "type": "vps789",
+      "url": "https://vps789.com/cfip/?remarks=domain",
+      "records": 262,
+      "elapsed": 3.24
+    },
+    "xinyitang": {
+      "status": "error",
+      "type": "xinyitang",
+      "url": "https://sub.xinyitang.dpdns.org/sub?host=123&uuid=456",
+      "records": 0,
+      "error": "HTTPSConnectionPool(host='sub.xinyitang.dpdns.org', port=443): Max retries exceeded with url: /sub?host=123&uuid=456 (Caused by NameResolutionError(\"HTTPSConnection(host='sub.xinyitang.dpdns.org', port=443): Failed to resolve 'sub.xinyitang.dpdns.org' ([Errno -3] Temporary failure in name resolution)\"))",
+      "elapsed": 10.03
+    },
+    "tiancheng": {
+      "status": "ok",
+      "type": "tiancheng",
+      "url": "https://cm.soso.edu.kg/sub?host=123&uuid=456",
+      "records": 51,
+      "elapsed": 1.64
+    }
   }
 }

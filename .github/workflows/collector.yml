@@ -2,53 +2,125 @@ name: CFEdge Collector
 
 on:
   workflow_dispatch:
+
   schedule:
     - cron: "17,47 * * * *"
 
 permissions:
   contents: write
 
+concurrency:
+  group: cfedge-collector
+  cancel-in-progress: true
+
 jobs:
   collector:
     runs-on: ubuntu-latest
 
     steps:
+      # ------------------------------------------------------
+      # Checkout
+      # ------------------------------------------------------
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
+      # ------------------------------------------------------
+      # Python
+      # ------------------------------------------------------
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: "pip"
+          cache: pip
 
+      # ------------------------------------------------------
+      # Dependencies
+      # ------------------------------------------------------
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r ./requirements.txt
+          python -m pip install -r requirements.txt
 
+      # ------------------------------------------------------
+      # Chromium
+      # ------------------------------------------------------
+      - name: Install Chromium
+        run: |
+          python -m playwright install chromium
+          python -m playwright install-deps chromium
+
+      # ------------------------------------------------------
+      # Run collector
+      # ------------------------------------------------------
       - name: Run collector
         env:
           HTTP_TIMEOUT: "20"
           ENABLE_ACTIVE_TEST: "false"
           ACTIVE_TEST_LIMIT: "300"
-          ACTIVE_TEST_WORKERS: "32"
         run: |
           python collector.py
 
-      - name: Show result
+      # ------------------------------------------------------
+      # Show statistics
+      # ------------------------------------------------------
+      - name: Show statistics
+        if: always()
         run: |
-          echo "===== Statistics ====="
-          cat data/stats.json
+          echo "=========================================="
+          echo "CFEdge Collector Statistics"
+          echo "=========================================="
+
+          if [ -f data/stats.json ]; then
+            cat data/stats.json
+          else
+            echo "stats.json not found"
+          fi
 
           echo
-          echo "===== IPv4 ====="
-          wc -l data/ip/ipv4.txt || true
+          echo "=========================================="
+          echo "IPv4"
+          echo "=========================================="
+          wc -l data/ip/ipv4.txt 2>/dev/null || true
 
           echo
-          echo "===== IPv6 ====="
-          wc -l data/ip/ipv6.txt || true
+          echo "=========================================="
+          echo "IPv6"
+          echo "=========================================="
+          wc -l data/ip/ipv6.txt 2>/dev/null || true
 
+          echo
+          echo "=========================================="
+          echo "Domain"
+          echo "=========================================="
+          wc -l data/domain/all.txt 2>/dev/null || true
+
+          echo
+          echo "=========================================="
+          echo "Source statistics"
+          echo "=========================================="
+
+          if [ -f data/stats.json ]; then
+            python - <<'PY'
+          import json
+
+          with open("data/stats.json", "r", encoding="utf-8") as f:
+              data = json.load(f)
+
+          for name, item in data.get("sources", {}).items():
+              print(
+                  f"{name}: "
+                  f"status={item.get('status')} "
+                  f"records={item.get('records', 0)} "
+                  f"elapsed={item.get('elapsed', 0)}s"
+              )
+          PY
+          fi
+
+      # ------------------------------------------------------
+      # Commit generated data
+      # ------------------------------------------------------
       - name: Commit data
         run: |
           git config user.name "github-actions[bot]"
@@ -57,8 +129,12 @@ jobs:
           git add data/
 
           if git diff --cached --quiet; then
-            echo "No changes."
-          else
-            git commit -m "update collector data"
-            git push
+            echo "No data changes."
+            exit 0
           fi
+
+          git commit -m "update collector data"
+
+          git pull --rebase origin main
+
+          git push origin main

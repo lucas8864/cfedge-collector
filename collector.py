@@ -1,210 +1,187 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""
-CFEdge Collector
-================
-
-Cloudflare IP / Domain 聚合采集器
-
-功能：
-    1. 多来源采集
-    2. IPv4 / IPv6 自动识别
-    3. IP 全局去重
-    4. 来源合并
-    5. ISP 分类
-    6. Colo 分类
-    7. Region 分类
-    8. Latency
-    9. Speed
-   10. Source Count
-   11. Score
-   12. TXT 输出
-   13. JSON 输出
-
-核心原则：
-    一个 collector.py 完成全部数据处理。
-"""
-
-from __future__ import annotations
-
 import base64
 import ipaddress
 import json
 import os
 import re
-import statistics
 import time
-
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections import defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 import requests
-from bs4 import BeautifulSoup
 
-
-# ============================================================
-# 基础配置
-# ============================================================
 
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "data"
 
 HTTP_TIMEOUT = int(os.getenv("HTTP_TIMEOUT", "20"))
-
-ENABLE_ACTIVE_TEST = (
-    os.getenv("ENABLE_ACTIVE_TEST", "false").lower()
-    in ("1", "true", "yes", "y")
-)
-
-ACTIVE_TEST_LIMIT = int(
-    os.getenv("ACTIVE_TEST_LIMIT", "300")
-)
-
-ACTIVE_TEST_WORKERS = int(
-    os.getenv("ACTIVE_TEST_WORKERS", "32")
-)
-
-USER_AGENT = (
-    "Mozilla/5.0 "
-    "(Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 "
-    "Chrome/140 Safari/537.36 "
-    "CFEdgeCollector/1.0"
-)
+ENABLE_ACTIVE_TEST = os.getenv("ENABLE_ACTIVE_TEST", "false").lower() == "true"
+ACTIVE_TEST_LIMIT = int(os.getenv("ACTIVE_TEST_LIMIT", "300"))
 
 HEADERS = {
-    "User-Agent": USER_AGENT,
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 Chrome/131.0 Safari/537.36"
+    ),
     "Accept": "*/*",
 }
 
 
 # ============================================================
-# 来源配置
+# 数据源
 # ============================================================
 
-SOURCE_URLS = {
+SOURCES = {
+    "vvhan": {
+        "type": "vvhan",
+        "enabled": True,
+        "url": "https://api.4ce.cn/api/bestCFIP",
+    },
 
-    # --------------------------------------------------------
-    # VVHAN
-    # --------------------------------------------------------
+    "nirevil_v4": {
+        "type": "nirevil",
+        "enabled": True,
+        "version": 4,
+        "url": (
+            "https://raw.githubusercontent.com/"
+            "NiREvil/vless/refs/heads/main/sub/Cf-ipv4.json"
+        ),
+    },
 
-    "vvhan":
-        "https://api.4ce.cn/api/bestCFIP",
+    "nirevil_v6": {
+        "type": "nirevil",
+        "enabled": True,
+        "version": 6,
+        "url": (
+            "https://raw.githubusercontent.com/"
+            "NiREvil/vless/refs/heads/main/sub/Cf-ipv6.json"
+        ),
+    },
 
-    # --------------------------------------------------------
-    # NiREvil
-    # --------------------------------------------------------
+    "mingyu_v4": {
+        "type": "plain_ip",
+        "enabled": True,
+        "version": 4,
+        "url": (
+            "https://raw.githubusercontent.com/"
+            "ymyuuu/IPDB/refs/heads/main/BestCF/bestcfv4.txt"
+        ),
+    },
 
-    "nirevil_v4":
-        "https://raw.githubusercontent.com/"
-        "NiREvil/vless/refs/heads/main/sub/Cf-ipv4.json",
+    "mingyu_v6": {
+        "type": "plain_ip",
+        "enabled": True,
+        "version": 6,
+        "url": (
+            "https://raw.githubusercontent.com/"
+            "ymyuuu/IPDB/refs/heads/main/BestCF/bestcfv6.txt"
+        ),
+    },
 
-    "nirevil_v6":
-        "https://raw.githubusercontent.com/"
-        "NiREvil/vless/refs/heads/main/sub/Cf-ipv6.json",
+    "gslege_speed": {
+        "type": "gslege",
+        "enabled": True,
+        "region": None,
+        "url": (
+            "https://raw.githubusercontent.com/"
+            "gslege/CloudflareIP/refs/heads/main/Cfxyz.txt"
+        ),
+    },
 
-    # --------------------------------------------------------
-    # MingYu
-    # --------------------------------------------------------
+    "gslege_jp": {
+        "type": "gslege",
+        "enabled": True,
+        "region": "JP",
+        "url": (
+            "https://raw.githubusercontent.com/"
+            "gslege/CloudflareIP/refs/heads/main/JP.txt"
+        ),
+    },
 
-    "mingyu_v4":
-        "https://raw.githubusercontent.com/"
-        "ymyuuu/IPDB/refs/heads/main/BestCF/bestcfv4.txt",
+    "gslege_nl": {
+        "type": "gslege",
+        "enabled": True,
+        "region": "NL",
+        "url": (
+            "https://raw.githubusercontent.com/"
+            "gslege/CloudflareIP/refs/heads/main/NL.txt"
+        ),
+    },
 
-    "mingyu_v6":
-        "https://raw.githubusercontent.com/"
-        "ymyuuu/IPDB/refs/heads/main/BestCF/bestcfv6.txt",
+    "gslege_us": {
+        "type": "gslege",
+        "enabled": True,
+        "region": "US",
+        "url": (
+            "https://raw.githubusercontent.com/"
+            "gslege/CloudflareIP/refs/heads/main/US.txt"
+        ),
+    },
 
-    # --------------------------------------------------------
-    # GSlege
-    # --------------------------------------------------------
+    "gslege_de": {
+        "type": "gslege",
+        "enabled": True,
+        "region": "DE",
+        "url": (
+            "https://raw.githubusercontent.com/"
+            "gslege/CloudflareIP/refs/heads/main/DE.txt"
+        ),
+    },
 
-    "gslege_cn":
-        "https://raw.githubusercontent.com/"
-        "gslege/CloudflareIP/refs/heads/main/Cfxyz.txt",
+    "gslege_sg": {
+        "type": "gslege",
+        "enabled": True,
+        "region": "SG",
+        "url": (
+            "https://raw.githubusercontent.com/"
+            "gslege/CloudflareIP/refs/heads/main/SG.txt"
+        ),
+    },
 
-    "gslege_jp":
-        "https://raw.githubusercontent.com/"
-        "gslege/CloudflareIP/refs/heads/main/JP.txt",
+    "zhixuanwang": {
+        "type": "zhixuanwang",
+        "enabled": True,
+        "url": (
+            "https://raw.githubusercontent.com/"
+            "ZhiXuanWang/cf-speed-dns/refs/heads/main/ipTop10.html"
+        ),
+    },
 
-    "gslege_nl":
-        "https://raw.githubusercontent.com/"
-        "gslege/CloudflareIP/refs/heads/main/NL.txt",
+    "vps789": {
+        "type": "vps789",
+        "enabled": True,
+        "url": "https://vps789.com/cfip/?remarks=domain",
+    },
 
-    "gslege_us":
-        "https://raw.githubusercontent.com/"
-        "gslege/CloudflareIP/refs/heads/main/US.txt",
+    "xinyitang": {
+        "type": "xinyitang",
+        "enabled": True,
+        "url": (
+            "https://sub.xinyitang.dpdns.org/"
+            "sub?host=123&uuid=456"
+        ),
+    },
 
-    "gslege_de":
-        "https://raw.githubusercontent.com/"
-        "gslege/CloudflareIP/refs/heads/main/DE.txt",
-
-    "gslege_sg":
-        "https://raw.githubusercontent.com/"
-        "gslege/CloudflareIP/refs/heads/main/SG.txt",
-
-    # --------------------------------------------------------
-    # ZhiXuanWang
-    # --------------------------------------------------------
-
-    "zhixuanwang":
-        "https://raw.githubusercontent.com/"
-        "ZhiXuanWang/cf-speed-dns/refs/heads/main/ipTop10.html",
-
-    # --------------------------------------------------------
-    # VPS789
-    # --------------------------------------------------------
-
-    "vps789":
-        "https://vps789.com/cfip/?remarks=domain",
-
-    # --------------------------------------------------------
-    # WeTest
-    # --------------------------------------------------------
-
-    "wetest":
-        "https://www.wetest.vip/page/cloudflare/address_v4.html",
-
-    # --------------------------------------------------------
-    # XinYiTang
-    # --------------------------------------------------------
-
-    "xinyitang":
-        "https://sub.xinyitang.dpdns.org/"
-        "sub?host=123&uuid=456",
-
-    # --------------------------------------------------------
-    # TianCheng
-    # --------------------------------------------------------
-
-    "tiancheng":
-        "https://cm.soso.edu.kg/"
-        "sub?host=123&uuid=456",
+    "tiancheng": {
+        "type": "tiancheng",
+        "enabled": True,
+        "url": (
+            "https://cm.soso.edu.kg/"
+            "sub?host=123&uuid=456"
+        ),
+    },
 }
 
 
 # ============================================================
-# 禁用来源
-# ============================================================
-
-DISABLED_SOURCES = {
-    x.strip()
-    for x in os.getenv(
-        "DISABLE_SOURCES",
-        ""
-    ).split(",")
-    if x.strip()
-}
-
-
-# ============================================================
-# Region 映射
+# Cloudflare Colo -> Region
 # ============================================================
 
 COLO_REGION = {
-
     "HKG": "HK",
     "TPE": "TW",
     "NRT": "JP",
@@ -223,2133 +200,1401 @@ COLO_REGION = {
 
     "FRA": "DE",
     "DUS": "DE",
-
     "AMS": "NL",
-
     "LHR": "UK",
     "CDG": "FR",
-
     "SYD": "AU",
 }
 
 
-# ============================================================
-# ISP
-# ============================================================
-
-ISP_ALIASES = {
-
+ISP_MAP = {
     "CM": "CM",
-    "CMCC": "CM",
     "MOBILE": "CM",
+    "CHINA MOBILE": "CM",
     "中国移动": "CM",
-    "移动": "CM",
 
     "CU": "CU",
     "UNICOM": "CU",
-    "CHINAUNICOM": "CU",
+    "CHINA UNICOM": "CU",
     "中国联通": "CU",
-    "联通": "CU",
 
     "CT": "CT",
     "TELECOM": "CT",
-    "CHINATELECOM": "CT",
+    "CHINA TELECOM": "CT",
     "中国电信": "CT",
-    "电信": "CT",
 }
 
 
-REGIONS = [
-    "HK",
-    "TW",
-    "JP",
-    "SG",
-    "KR",
-    "US",
-    "DE",
-    "NL",
-    "UK",
-    "FR",
-    "AU",
-]
-
-
-ISPS = [
-    "CM",
-    "CU",
-    "CT",
+REGION_PATTERNS = [
+    (r"\bHKG\b|\bHK\b|香港|Hong\s*Kong", "HK"),
+    (r"\bSIN\b|\bSG\b|新加坡|Singapore", "SG"),
+    (r"\bJPN\b|\bJP\b|日本|Japan", "JP"),
+    (r"\bTWN\b|\bTW\b|台湾|Taiwan", "TW"),
+    (r"\bKOR\b|\bKR\b|韩国|Korea", "KR"),
+    (r"\bUSA\b|\bUS\b|美国|United\s*States", "US"),
+    (r"\bGBR\b|\bUK\b|英国|United\s*Kingdom", "UK"),
+    (r"\bRUS\b|\bRU\b|俄罗斯|Russia", "RU"),
+    (r"\bDEU\b|\bDE\b|德国|Germany", "DE"),
+    (r"\bNLD\b|\bNL\b|荷兰|Netherlands", "NL"),
+    (r"\bFRA\b|\bFR\b|法国|France", "FR"),
+    (r"\bAUS\b|\bAU\b|澳大利亚|Australia", "AU"),
 ]
 
 
 # ============================================================
-# HTTP Session
+# 基础工具
 # ============================================================
 
-SESSION = requests.Session()
-SESSION.headers.update(HEADERS)
+def now_iso():
+    return datetime.now(timezone.utc).isoformat()
 
 
-# ============================================================
-# HTTP
-# ============================================================
+def ensure_dirs():
+    paths = [
+        DATA_DIR,
+        DATA_DIR / "ip",
+        DATA_DIR / "domain",
+        DATA_DIR / "region",
+        DATA_DIR / "isp",
+        DATA_DIR / "quality",
+        DATA_DIR / "source",
+    ]
 
-def http_get(
-    url,
-    timeout=None,
-    allow_redirects=True,
-):
+    for path in paths:
+        path.mkdir(parents=True, exist_ok=True)
 
+
+def fetch(url, timeout=None):
     timeout = timeout or HTTP_TIMEOUT
 
+    response = requests.get(
+        url,
+        headers=HEADERS,
+        timeout=timeout,
+        allow_redirects=True,
+    )
+
+    response.raise_for_status()
+
+    return response.text
+
+
+def fetch_json(url):
+    text = fetch(url)
+
     try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        # 有些接口返回 JSONP / 前后存在无关字符
+        start = text.find("{")
+        end = text.rfind("}")
 
-        response = SESSION.get(
-            url,
-            timeout=timeout,
-            allow_redirects=allow_redirects,
-        )
+        if start >= 0 and end > start:
+            return json.loads(text[start:end + 1])
 
-        response.raise_for_status()
+        start = text.find("[")
+        end = text.rfind("]")
 
-        return response
+        if start >= 0 and end > start:
+            return json.loads(text[start:end + 1])
 
-    except Exception as exc:
+        raise
 
-        print(
-            f"[HTTP ERROR] "
-            f"{url} -> {exc}"
-        )
-
-        return None
-
-
-# ============================================================
-# IP 标准化
-# ============================================================
 
 def normalize_ip(value):
-
     if value is None:
         return None
 
     value = str(value).strip()
 
+    value = value.strip("[](),;\"'")
+
+    # 去掉可能存在的端口
+    if re.match(r"^\d+\.\d+\.\d+\.\d+:\d+$", value):
+        value = value.rsplit(":", 1)[0]
+
+    try:
+        return str(ipaddress.ip_address(value))
+    except ValueError:
+        return None
+
+
+def detect_ip_version(ip):
+    try:
+        return ipaddress.ip_address(ip).version
+    except Exception:
+        return None
+
+
+def normalize_domain(value):
+    if value is None:
+        return None
+
+    value = str(value).strip()
+    value = value.strip("[](),;\"'")
+
     if not value:
         return None
 
-    value = value.strip(
-        "\"'`()[] "
-    )
+    if "://" in value:
+        try:
+            parsed = urlparse(value)
+            value = parsed.hostname or ""
+        except Exception:
+            return None
 
-    # IPv6 URL 格式
-    if value.startswith("["):
+    if "/" in value:
+        value = value.split("/", 1)[0]
 
-        match = re.match(
-            r"^\[([0-9a-fA-F:]+)\](?::\d+)?$",
-            value
-        )
-
-        if match:
-            value = match.group(1)
-
-    # IPv4:port
-    elif value.count(":") == 1:
-
+    if ":" in value and value.count(":") == 1:
         host, port = value.rsplit(":", 1)
 
         if port.isdigit():
             value = host
 
-    # IPv6:port
-    elif value.count(":") > 1:
+    value = value.rstrip(".")
 
-        match = re.match(
-            r"^(.+):(\d{2,5})$",
-            value
-        )
-
-        if match:
-
-            candidate = match.group(1)
-
-            try:
-                ipaddress.ip_address(candidate)
-                value = candidate
-            except Exception:
-                pass
+    if not value:
+        return None
 
     try:
-
-        return str(
-            ipaddress.ip_address(value)
-        )
-
+        if ipaddress.ip_address(value):
+            return None
     except Exception:
+        pass
 
-        return None
-
-
-# ============================================================
-# IP + Port
-# ============================================================
-
-def parse_ip_port(value):
-
-    if not value:
-        return None, 443
-
-    value = str(value).strip()
-
-    # IPv6 [addr]:port
-    match = re.search(
-        r"\[([0-9a-fA-F:]+)\]"
-        r"(?::(\d{1,5}))?",
-        value
-    )
-
-    if match:
-
-        ip = normalize_ip(
-            match.group(1)
-        )
-
-        port = int(
-            match.group(2) or 443
-        )
-
-        return ip, port
-
-    # IPv4
-    match = re.search(
-        r"(?<![\w.])"
-        r"((?:\d{1,3}\.){3}\d{1,3})"
-        r"(?::(\d{1,5}))?",
-        value
-    )
-
-    if match:
-
-        ip = normalize_ip(
-            match.group(1)
-        )
-
-        port = int(
-            match.group(2) or 443
-        )
-
-        return ip, port
-
-    # IPv6
-    match = re.search(
-        r"(?<![\w])"
-        r"([0-9a-fA-F]{1,4}"
-        r"(?:\:[0-9a-fA-F]{1,4}){2,7})"
-        r"(?::(\d{1,5}))?",
-        value
-    )
-
-    if match:
-
-        ip = normalize_ip(
-            match.group(1)
-        )
-
-        port = int(
-            match.group(2) or 443
-        )
-
-        return ip, port
-
-    return None, 443
-
-
-# ============================================================
-# Domain
-# ============================================================
-
-def normalize_domain(value):
-
-    if not value:
-        return None
-
-    value = str(value).strip().lower()
-
-    value = re.sub(
-        r"^https?://",
-        "",
-        value
-    )
-
-    value = value.split("/")[0]
-
-    if ":" in value:
-        value = value.split(":")[0]
-
-    if re.fullmatch(
-        r"(?:[a-z0-9-]+\.)+[a-z]{2,63}",
-        value
+    if not re.match(
+        r"^(?=.{1,253}$)"
+        r"(?:[A-Za-z0-9]"
+        r"(?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
+        r"[A-Za-z]{2,63}$",
+        value,
     ):
-
-        return value
-
-    return None
-
-
-# ============================================================
-# ISP
-# ============================================================
-
-def normalize_isp(value):
-
-    if not value:
         return None
 
-    value = str(value).strip()
+    return value.lower()
 
-    key = value.upper()
 
-    return ISP_ALIASES.get(
-        key,
-        ISP_ALIASES.get(value)
+def extract_ips(text):
+    if not text:
+        return []
+
+    results = []
+
+    ipv4_pattern = (
+        r"\b(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)"
+        r"(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}\b"
     )
 
+    ipv6_pattern = r"(?<![A-Za-z0-9:])(?:[0-9A-Fa-f]{1,4}:){2,7}[0-9A-Fa-f]{1,4}(?![A-Za-z0-9:])"
 
-# ============================================================
-# 数值
-# ============================================================
+    results.extend(re.findall(ipv4_pattern, text))
+    results.extend(re.findall(ipv6_pattern, text))
 
-def number(value):
+    output = []
 
+    for item in results:
+        ip = normalize_ip(item)
+
+        if ip and ip not in output:
+            output.append(ip)
+
+    return output
+
+
+def extract_domains(text):
+    if not text:
+        return []
+
+    pattern = (
+        r"(?<![@A-Za-z0-9-])"
+        r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
+        r"[A-Za-z]{2,63}"
+        r"(?![A-Za-z0-9-])"
+    )
+
+    results = []
+
+    for item in re.findall(pattern, text):
+        domain = normalize_domain(item)
+
+        if domain and domain not in results:
+            results.append(domain)
+
+    return results
+
+
+def to_number(value):
     if value is None:
         return None
 
-    if isinstance(
-        value,
-        (int, float)
-    ):
-
+    if isinstance(value, (int, float)):
         return float(value)
 
-    text = str(value)
+    text = str(value).strip()
 
-    match = re.search(
-        r"-?\d+(?:\.\d+)?",
-        text
-    )
+    if not text:
+        return None
+
+    match = re.search(r"-?\d+(?:\.\d+)?", text)
 
     if not match:
         return None
 
     try:
-        return float(
-            match.group()
-        )
-
+        return float(match.group())
     except Exception:
-
         return None
 
 
+def normalize_latency(value):
+    value = to_number(value)
+
+    if value is None or value < 0:
+        return None
+
+    return round(value, 2)
+
+
+def normalize_speed(value):
+    value = to_number(value)
+
+    if value is None or value < 0:
+        return None
+
+    text = str(value).lower()
+
+    if "kb/s" in text or "kbps" in text:
+        value = value / 1024
+
+    elif "gb/s" in text or "gbps" in text:
+        value = value * 1024
+
+    return round(value, 2)
+
+
+def normalize_isp(value):
+    if value is None:
+        return None
+
+    text = str(value).strip().upper()
+
+    if not text:
+        return None
+
+    for key, result in ISP_MAP.items():
+        if key in text:
+            return result
+
+    return text[:30]
+
+
+def infer_region(text):
+    if not text:
+        return None
+
+    text = str(text)
+
+    for pattern, region in REGION_PATTERNS:
+        if re.search(pattern, text, re.I):
+            return region
+
+    return None
+
+
+def region_from_colo(colo):
+    if not colo:
+        return None
+
+    return COLO_REGION.get(str(colo).upper())
+
+
 # ============================================================
-# 新建记录
+# Record
 # ============================================================
 
-def make_record(
-    ip=None,
-    domain=None,
-    source="unknown",
+def new_record(
+    host,
+    source,
     port=443,
+    version=None,
+    region=None,
     isp=None,
     colo=None,
-    region=None,
     latency=None,
     speed=None,
 ):
+    ip = normalize_ip(host)
 
-    ip = normalize_ip(ip)
+    if ip:
+        host_type = "ip"
 
-    if domain:
-        domain = normalize_domain(
-            domain
-        )
+        if version is None:
+            version = detect_ip_version(ip)
+
+        canonical_host = ip
+    else:
+        domain = normalize_domain(host)
+
+        if not domain:
+            return None
+
+        host_type = "domain"
+        canonical_host = domain
 
     record = {
-
-        "ip": ip,
-
-        "domain": domain,
-
-        "version": (
-            ipaddress.ip_address(ip).version
-            if ip
-            else None
-        ),
-
+        "ip": canonical_host if host_type == "ip" else None,
+        "domain": canonical_host if host_type == "domain" else None,
+        "version": version if host_type == "ip" else None,
         "port": int(port or 443),
-
-        "sources": [],
-
+        "sources": [source],
+        "source_count": 1,
         "isp": [],
-
         "colo": [],
-
         "region": [],
-
-        "latency": None,
-
-        "speed": None,
-
+        "latency": normalize_latency(latency),
+        "speed": normalize_speed(speed),
+        "score": 0,
     }
 
-    merge_metadata(
-        record,
-        source=source,
-        isp=isp,
-        colo=colo,
-        region=region,
-        latency=latency,
-        speed=speed,
-    )
+    if isp:
+        isp = normalize_isp(isp)
+
+        if isp:
+            record["isp"].append(isp)
+
+    if colo:
+        colo = str(colo).strip().upper()
+
+        if colo:
+            record["colo"].append(colo)
+
+    if region:
+        region = infer_region(region) or str(region).upper()
+
+        if region and region not in record["region"]:
+            record["region"].append(region)
 
     return record
 
 
-# ============================================================
-# 合并元数据
-# ============================================================
+def merge_record(target, incoming):
+    for source in incoming.get("sources", []):
+        if source not in target["sources"]:
+            target["sources"].append(source)
 
-def merge_metadata(
-    record,
-    source=None,
-    isp=None,
-    colo=None,
-    region=None,
-    latency=None,
-    speed=None,
-):
+    target["source_count"] = len(target["sources"])
 
-    if source:
+    for field in ("isp", "colo", "region"):
+        for value in incoming.get(field, []):
+            if value and value not in target[field]:
+                target[field].append(value)
 
-        if source not in record["sources"]:
+    incoming_latency = incoming.get("latency")
 
-            record["sources"].append(
-                source
+    if incoming_latency is not None:
+        if target["latency"] is None:
+            target["latency"] = incoming_latency
+        else:
+            target["latency"] = min(
+                target["latency"],
+                incoming_latency,
             )
 
-    isp = normalize_isp(isp)
+    incoming_speed = incoming.get("speed")
 
-    if isp and isp not in record["isp"]:
-
-        record["isp"].append(
-            isp
-        )
-
-    if colo:
-
-        colo = str(
-            colo
-        ).strip().upper()
-
-        if colo not in record["colo"]:
-
-            record["colo"].append(
-                colo
+    if incoming_speed is not None:
+        if target["speed"] is None:
+            target["speed"] = incoming_speed
+        else:
+            target["speed"] = max(
+                target["speed"],
+                incoming_speed,
             )
-
-    if region:
-
-        region = str(
-            region
-        ).strip().upper()
-
-        if region not in record["region"]:
-
-            record["region"].append(
-                region
-            )
-
-    latency = number(
-        latency
-    )
-
-    if latency is not None:
-
-        if latency >= 0:
-
-            if (
-                record["latency"]
-                is None
-            ):
-
-                record["latency"] = latency
-
-            else:
-
-                record["latency"] = min(
-                    record["latency"],
-                    latency
-                )
-
-    speed = number(
-        speed
-    )
-
-    if speed is not None:
-
-        if speed >= 0:
-
-            if (
-                record["speed"]
-                is None
-            ):
-
-                record["speed"] = speed
-
-            else:
-
-                record["speed"] = max(
-                    record["speed"],
-                    speed
-                )
 
 
 # ============================================================
-# VVHAN
+# JSON 字段提取
 # ============================================================
 
-def collect_vvhan():
+def find_value(obj, names):
+    if not isinstance(obj, dict):
+        return None
 
-    if "vvhan" in DISABLED_SOURCES:
-        return []
+    lowered = {
+        str(k).lower(): v
+        for k, v in obj.items()
+    }
 
-    print("[SOURCE] vvhan")
+    for name in names:
+        value = lowered.get(name.lower())
 
-    response = http_get(
-        SOURCE_URLS["vvhan"]
-    )
+        if value is not None:
+            return value
 
-    if not response:
-        return []
+    return None
 
-    result = []
 
-    try:
+def walk_json_records(obj):
+    if isinstance(obj, list):
+        for item in obj:
+            yield from walk_json_records(item)
 
-        data = response.json()
-
-        data = data.get(
-            "data",
-            {}
-        )
-
-        for version in (
-            "v4",
-            "v6",
+    elif isinstance(obj, dict):
+        # 当前对象本身可能就是记录
+        if any(
+            key in {str(k).lower() for k in obj.keys()}
+            for key in (
+                "ip",
+                "address",
+                "host",
+                "server",
+                "ipv4",
+                "ipv6",
+            )
         ):
+            yield obj
 
-            items = data.get(
-                version,
-                []
-            )
+        for value in obj.values():
+            if isinstance(value, (dict, list)):
+                yield from walk_json_records(value)
 
-            for item in items:
 
-                if not isinstance(
-                    item,
-                    dict
-                ):
-                    continue
+# ============================================================
+# vvhan
+# ============================================================
 
-                ip, port = parse_ip_port(
-                    item.get("ip")
-                    or item.get("address")
-                )
+def collect_vvhan(config, source):
+    data = fetch_json(config["url"])
 
-                if not ip:
-                    continue
+    records = []
 
-                result.append(
-                    make_record(
-                        ip=ip,
-                        port=port,
-                        source="vvhan",
-                        isp=(
-                            item.get("isp")
-                            or item.get(
-                                "operator"
-                            )
-                        ),
-                        colo=item.get(
-                            "colo"
-                        ),
-                        region=item.get(
-                            "region"
-                        ),
-                        latency=item.get(
-                            "latency"
-                        ),
-                        speed=item.get(
-                            "speed"
-                        ),
-                    )
-                )
-
-    except Exception as exc:
-
-        print(
-            "[ERROR] vvhan:",
-            exc
+    for item in walk_json_records(data):
+        ip = find_value(
+            item,
+            [
+                "ip",
+                "address",
+                "host",
+                "server",
+                "ipv4",
+                "ipv6",
+            ],
         )
 
-    return result
+        if isinstance(ip, list):
+            ip = ip[0] if ip else None
+
+        ip = normalize_ip(ip)
+
+        if not ip:
+            continue
+
+        colo = find_value(
+            item,
+            [
+                "colo",
+                "cfcolo",
+                "airport",
+                "datacenter",
+                "dc",
+            ],
+        )
+
+        latency = find_value(
+            item,
+            [
+                "latency",
+                "delay",
+                "ping",
+                "rtt",
+                "time",
+            ],
+        )
+
+        speed = find_value(
+            item,
+            [
+                "speed",
+                "speed_mbps",
+                "mbps",
+                "download",
+                "download_speed",
+            ],
+        )
+
+        isp = find_value(
+            item,
+            [
+                "isp",
+                "line",
+                "operator",
+                "carrier",
+            ],
+        )
+
+        region = find_value(
+            item,
+            [
+                "region",
+                "country",
+                "country_code",
+            ],
+        )
+
+        record = new_record(
+            ip,
+            source,
+            port=443,
+            version=detect_ip_version(ip),
+            region=region,
+            isp=isp,
+            colo=colo,
+            latency=latency,
+            speed=speed,
+        )
+
+        if record:
+            records.append(record)
+
+    return records
 
 
 # ============================================================
 # NiREvil
 # ============================================================
 
-def collect_nirevil():
+def collect_nirevil(config, source):
+    data = fetch_json(config["url"])
 
-    result = []
+    records = []
 
-    for source_name in (
-        "nirevil_v4",
-        "nirevil_v6",
-    ):
-
-        if source_name in DISABLED_SOURCES:
-            continue
-
-        print(
-            f"[SOURCE] {source_name}"
+    for item in walk_json_records(data):
+        ip = find_value(
+            item,
+            [
+                "ip",
+                "address",
+                "host",
+                "server",
+                "ipv4",
+                "ipv6",
+            ],
         )
 
-        response = http_get(
-            SOURCE_URLS[source_name]
-        )
+        if isinstance(ip, list):
+            values = ip
+        else:
+            values = [ip]
 
-        if not response:
-            continue
+        for value in values:
+            ip = normalize_ip(value)
 
-        try:
+            if not ip:
+                continue
 
-            data = response.json()
-
-            if isinstance(
-                data,
-                dict
-            ):
-
-                items = (
-                    data.get("data")
-                    or data.get("nodes")
-                    or data.get("list")
-                    or []
-                )
-
-            elif isinstance(
-                data,
-                list
-            ):
-
-                items = data
-
-            else:
-
-                items = []
-
-            for item in items:
-
-                if isinstance(
-                    item,
-                    str
-                ):
-
-                    ip, port = parse_ip_port(
-                        item
-                    )
-
-                    meta = {}
-
-                elif isinstance(
-                    item,
-                    dict
-                ):
-
-                    ip, port = parse_ip_port(
-                        item.get("ip")
-                        or item.get(
-                            "address"
-                        )
-                        or item.get(
-                            "host"
-                        )
-                    )
-
-                    meta = item
-
-                else:
-
-                    continue
-
-                if not ip:
-                    continue
-
-                result.append(
-                    make_record(
-                        ip=ip,
-                        port=port,
-                        source=source_name,
-                        isp=(
-                            meta.get("isp")
-                            or meta.get(
-                                "operator"
-                            )
-                        ),
-                        colo=meta.get(
-                            "colo"
-                        ),
-                        region=meta.get(
-                            "region"
-                        ),
-                        latency=meta.get(
-                            "latency"
-                        ),
-                        speed=meta.get(
-                            "speed"
-                        ),
-                    )
-                )
-
-        except Exception as exc:
-
-            print(
-                f"[ERROR] {source_name}:",
-                exc
+            colo = find_value(
+                item,
+                [
+                    "colo",
+                    "cfcolo",
+                    "airport",
+                    "datacenter",
+                    "dc",
+                ],
             )
 
-    return result
+            latency = find_value(
+                item,
+                [
+                    "latency",
+                    "delay",
+                    "ping",
+                    "rtt",
+                ],
+            )
 
+            speed = find_value(
+                item,
+                [
+                    "speed",
+                    "speed_mbps",
+                    "mbps",
+                    "download",
+                ],
+            )
 
-# ============================================================
-# 普通 TXT IP 源
-# ============================================================
+            isp = find_value(
+                item,
+                [
+                    "isp",
+                    "line",
+                    "operator",
+                    "carrier",
+                ],
+            )
 
-def collect_plain_ip(
-    source_name,
-    region=None,
-):
+            region = find_value(
+                item,
+                [
+                    "region",
+                    "country",
+                    "country_code",
+                ],
+            )
 
-    if source_name in DISABLED_SOURCES:
-        return []
-
-    print(
-        f"[SOURCE] {source_name}"
-    )
-
-    response = http_get(
-        SOURCE_URLS[source_name]
-    )
-
-    if not response:
-        return []
-
-    result = []
-
-    for line in response.text.splitlines():
-
-        ip, port = parse_ip_port(
-            line
-        )
-
-        if not ip:
-            continue
-
-        result.append(
-            make_record(
-                ip=ip,
-                port=port,
-                source=source_name,
+            record = new_record(
+                ip,
+                source,
+                version=detect_ip_version(ip),
                 region=region,
+                isp=isp,
+                colo=colo,
+                latency=latency,
+                speed=speed,
             )
-        )
 
-    return result
+            if record:
+                records.append(record)
+
+    return records
 
 
 # ============================================================
-# MingYu
+# Plain IP
 # ============================================================
 
-def collect_mingyu():
+def collect_plain_ip(config, source):
+    text = fetch(config["url"])
 
-    result = []
+    records = []
 
-    for source_name in (
-        "mingyu_v4",
-        "mingyu_v6",
-    ):
+    for ip in extract_ips(text):
+        version = detect_ip_version(ip)
 
-        result.extend(
-            collect_plain_ip(
-                source_name
-            )
+        if config.get("version"):
+            version = config["version"]
+
+        record = new_record(
+            ip,
+            source,
+            version=version,
         )
 
-    return result
+        if record:
+            records.append(record)
+
+    return records
 
 
 # ============================================================
 # GSlege
 # ============================================================
 
-def collect_gslege():
+def collect_gslege(config, source):
+    text = fetch(config["url"])
 
-    mapping = {
+    records = []
 
-        "gslege_cn": None,
-        "gslege_jp": "JP",
-        "gslege_nl": "NL",
-        "gslege_us": "US",
-        "gslege_de": "DE",
-        "gslege_sg": "SG",
-
-    }
-
-    result = []
-
-    for source_name, region in mapping.items():
-
-        result.extend(
-            collect_plain_ip(
-                source_name,
-                region
-            )
+    for ip in extract_ips(text):
+        record = new_record(
+            ip,
+            source,
+            version=detect_ip_version(ip),
+            region=config.get("region"),
         )
 
-    return result
+        if record:
+            records.append(record)
+
+    return records
 
 
 # ============================================================
 # ZhiXuanWang
 # ============================================================
 
-def collect_zhixuanwang():
+def collect_zhixuanwang(config, source):
+    text = fetch(config["url"])
 
-    if "zhixuanwang" in DISABLED_SOURCES:
-        return []
+    records = []
 
-    print(
-        "[SOURCE] zhixuanwang"
-    )
-
-    response = http_get(
-        SOURCE_URLS[
-            "zhixuanwang"
-        ]
-    )
-
-    if not response:
-        return []
-
-    result = []
-
-    text = BeautifulSoup(
-        response.text,
-        "html.parser"
-    ).get_text(
-        " "
-    )
-
-    # 直接提取 IPv4 / IPv6
-    matches = re.findall(
-        r"(?<![\w.])"
-        r"(?:\d{1,3}\.){3}\d{1,3}"
-        r"(?![\w.])"
-        r"|"
-        r"(?<![\w])"
-        r"[0-9a-fA-F]{1,4}"
-        r"(?:\:[0-9a-fA-F]{1,4}){2,7}"
-        r"(?![\w])",
-        text
-    )
-
-    for value in matches:
-
-        ip = normalize_ip(
-            value
+    # 原始文件是 HTML / 文本混合格式。
+    # 不假设固定逗号结构，直接扫描 IP。
+    for ip in extract_ips(text):
+        record = new_record(
+            ip,
+            source,
+            version=detect_ip_version(ip),
         )
 
-        if not ip:
+        if record:
+            records.append(record)
+
+    return records
+
+
+# ============================================================
+# Base64
+# ============================================================
+
+def decode_base64_text(text):
+    if not text:
+        return ""
+
+    text = text.strip()
+
+    candidates = [
+        text,
+        text.replace("-", "+").replace("_", "/"),
+    ]
+
+    for candidate in candidates:
+        candidate = re.sub(r"\s+", "", candidate)
+
+        padding = len(candidate) % 4
+
+        if padding:
+            candidate += "=" * (4 - padding)
+
+        try:
+            decoded = base64.b64decode(
+                candidate,
+                validate=False,
+            )
+
+            result = decoded.decode(
+                "utf-8",
+                errors="ignore",
+            )
+
+            if result:
+                return result
+
+        except Exception:
+            pass
+
+    return text
+
+
+# ============================================================
+# VLESS
+# ============================================================
+
+def parse_vless_line(line):
+    line = line.strip()
+
+    if not line:
+        return None
+
+    if line.startswith("vless://") is False:
+        return None
+
+    try:
+        parsed = urlparse(line)
+
+        host = parsed.hostname
+
+        if not host:
+            return None
+
+        port = parsed.port or 443
+
+        query = parse_qs(parsed.query)
+
+        remark = unquote(
+            parsed.fragment or ""
+        )
+
+        region = infer_region(
+            remark + " " + line
+        )
+
+        sni = query.get("sni", [None])[0]
+
+        if not region and sni:
+            region = infer_region(sni)
+
+        return {
+            "host": host,
+            "port": port,
+            "region": region,
+            "remark": remark,
+            "sni": sni,
+        }
+
+    except Exception:
+        return None
+
+
+def collect_vless_source(config, source):
+    raw = fetch(config["url"])
+
+    decoded = decode_base64_text(raw)
+
+    records = []
+
+    for line in decoded.splitlines():
+        line = line.strip()
+
+        if not line:
             continue
 
-        result.append(
-            make_record(
-                ip=ip,
-                source="zhixuanwang"
-            )
-        )
+        parsed = parse_vless_line(line)
 
-    return result
+        if not parsed:
+            continue
+
+        host = parsed["host"]
+        port = parsed["port"]
+        region = parsed["region"]
+
+        ip = normalize_ip(host)
+
+        if ip:
+            record = new_record(
+                ip,
+                source,
+                port=port,
+                version=detect_ip_version(ip),
+                region=region,
+            )
+        else:
+            domain = normalize_domain(host)
+
+            if not domain:
+                continue
+
+            record = new_record(
+                domain,
+                source,
+                port=port,
+                region=region,
+            )
+
+        if record:
+            records.append(record)
+
+    return records
+
+
+def collect_xinyitang(config, source):
+    return collect_vless_source(
+        config,
+        source,
+    )
+
+
+def collect_tiancheng(config, source):
+    return collect_vless_source(
+        config,
+        source,
+    )
 
 
 # ============================================================
 # VPS789
 # ============================================================
 
-def collect_vps789():
-
-    if "vps789" in DISABLED_SOURCES:
-        return []
-
-    print(
-        "[SOURCE] vps789"
-    )
-
-    response = http_get(
-        SOURCE_URLS[
-            "vps789"
-        ]
-    )
-
-    if not response:
-        return []
-
-    result = []
-
-    soup = BeautifulSoup(
-        response.text,
-        "html.parser"
-    )
-
-    for tr in soup.select(
-        "tr"
-    ):
-
-        cells = [
-            x.get_text(
-                " ",
-                strip=True
-            )
-            for x in tr.select(
-                "td"
-            )
-        ]
-
-        if not cells:
-            continue
-
-        ip, port = parse_ip_port(
-            cells[0]
-        )
-
-        if not ip:
-            continue
-
-        region = None
-
-        if len(cells) > 1:
-
-            value = (
-                cells[1]
-                .strip()
-                .upper()
-            )
-
-            if re.fullmatch(
-                r"[A-Z]{2,3}",
-                value
-            ):
-
-                region = value
-
-        result.append(
-            make_record(
-                ip=ip,
-                port=port,
-                source="vps789",
-                region=region
-            )
-        )
-
-    return result
-
-
-# ============================================================
-# WeTest
-# ============================================================
-
-def collect_wetest():
-
-    if "wetest" in DISABLED_SOURCES:
-        return []
-
-    print(
-        "[SOURCE] wetest"
-    )
-
-    response = http_get(
-        SOURCE_URLS[
-            "wetest"
-        ]
-    )
-
-    if not response:
-        return []
-
-    result = []
-
-    soup = BeautifulSoup(
-        response.text,
-        "html.parser"
-    )
-
-    # 兼容表格结构
-    for tr in soup.select(
-        "tr"
-    ):
-
-        text = tr.get_text(
-            " ",
-            strip=True
-        )
-
-        ip, port = parse_ip_port(
-            text
-        )
-
-        if not ip:
-            continue
-
-        region = None
-
-        upper = text.upper()
-
-        for colo, reg in COLO_REGION.items():
-
-            if colo in upper:
-
-                region = reg
-
-                break
-
-        result.append(
-            make_record(
-                ip=ip,
-                port=port,
-                source="wetest",
-                region=region
-            )
-        )
-
-    # 页面有时不是标准 table
-    if not result:
-
-        for match in re.findall(
-            r"(?<![\w.])"
-            r"(?:\d{1,3}\.){3}\d{1,3}"
-            r"(?![\w.])",
-            response.text
-        ):
-
-            ip = normalize_ip(
-                match
-            )
-
-            if ip:
-
-                result.append(
-                    make_record(
-                        ip=ip,
-                        source="wetest"
-                    )
-                )
-
-    return result
-
-
-# ============================================================
-# Base64 解码
-# ============================================================
-
-def decode_base64(text):
-
-    if not text:
-        return ""
-
-    text = text.strip()
-
-    # URL-safe Base64
-    text += "=" * (
-        (-len(text)) % 4
-    )
-
-    try:
-
-        return base64.b64decode(
-            text,
-            validate=False
-        ).decode(
-            "utf-8",
-            errors="ignore"
-        )
-
-    except Exception:
-
-        return ""
-
-
-# ============================================================
-# 从 VLESS 中提取 host
-# ============================================================
-
-def parse_vless(
-    text,
-    source_name
-):
-
-    result = []
-
-    for line in text.splitlines():
-
-        line = line.strip()
-
-        if not line.startswith(
-            "vless://"
-        ):
-
-            continue
-
-        try:
-
-            parsed = urlparse(
-                line
-            )
-
-            host = parsed.hostname
-
-            port = (
-                parsed.port
-                or 443
-            )
-
-            ip = normalize_ip(
-                host
-            )
-
-            if not ip:
-
-                continue
-
-            region = None
-
-            upper = line.upper()
-
-            for code, reg in {
-                "HKG": "HK",
-                "HK": "HK",
-                "TPE": "TW",
-                "TW": "TW",
-                "NRT": "JP",
-                "JP": "JP",
-                "SIN": "SG",
-                "SG": "SG",
-                "ICN": "KR",
-                "KR": "KR",
-                "LAX": "US",
-                "US": "US",
-                "FRA": "DE",
-                "DE": "DE",
-            }.items():
-
-                if code in upper:
-
-                    region = reg
-
-                    break
-
-            result.append(
-                make_record(
-                    ip=ip,
-                    port=port,
-                    source=source_name,
-                    region=region
-                )
-            )
-
-        except Exception:
-
-            continue
-
-    return result
-
-
-# ============================================================
-# XinYiTang
-# ============================================================
-
-def collect_xinyitang():
-
-    if "xinyitang" in DISABLED_SOURCES:
-        return []
-
-    print(
-        "[SOURCE] xinyitang"
-    )
-
-    response = http_get(
-        SOURCE_URLS[
-            "xinyitang"
-        ]
-    )
-
-    if not response:
-        return []
-
-    text = response.text.strip()
-
-    decoded = decode_base64(
-        text
-    )
-
-    if not decoded:
-
-        decoded = text
-
-    return parse_vless(
-        decoded,
-        "xinyitang"
-    )
-
-
-# ============================================================
-# TianCheng
-# ============================================================
-
-def collect_tiancheng():
-
-    if "tiancheng" in DISABLED_SOURCES:
-        return []
-
-    print(
-        "[SOURCE] tiancheng"
-    )
-
-    response = http_get(
-        SOURCE_URLS[
-            "tiancheng"
-        ]
-    )
-
-    if not response:
-        return []
-
-    text = response.text.strip()
-
-    decoded = decode_base64(
-        text
-    )
-
-    if not decoded:
-
-        decoded = text
-
-    return parse_vless(
-        decoded,
-        "tiancheng"
-    )
-
-
-# ============================================================
-# 所有来源
-# ============================================================
-
-def collect_all():
+def collect_vps789(config, source):
+    """
+    VPS789 是动态网页。
+
+    优先使用 Playwright。
+    如果 Playwright 不可用，则退化为 requests
+    + 正则提取域名。
+    """
 
     records = []
 
-    collectors = [
+    html = ""
 
-        collect_vvhan,
+    try:
+        from playwright.sync_api import sync_playwright
 
-        collect_nirevil,
+        with sync_playwright() as p:
+            browser = p.chromium.launch(
+                headless=True
+            )
 
-        collect_mingyu,
+            page = browser.new_page(
+                user_agent=HEADERS["User-Agent"]
+            )
 
-        collect_gslege,
+            page.goto(
+                config["url"],
+                wait_until="domcontentloaded",
+                timeout=HTTP_TIMEOUT * 1000,
+            )
 
-        collect_zhixuanwang,
+            page.wait_for_timeout(1500)
 
-        collect_vps789,
+            html = page.content()
 
-        collect_wetest,
+            browser.close()
 
-        collect_xinyitang,
-
-        collect_tiancheng,
-
-    ]
-
-    for collector in collectors:
+    except Exception as exc:
+        print(
+            f"[WARN] {source}: Playwright failed: {exc}"
+        )
 
         try:
-
-            rows = collector()
-
+            html = fetch(config["url"])
+        except Exception as fallback_exc:
             print(
-                f"        -> {len(rows)} records"
+                f"[WARN] {source}: "
+                f"requests fallback failed: {fallback_exc}"
             )
+            return records
 
-            records.extend(
-                rows
+    # 从 HTML 中提取所有域名
+    domains = extract_domains(html)
+
+    # 排除明显无关域名
+    excluded = {
+        "w3.org",
+        "google.com",
+        "googleapis.com",
+        "cloudflare.com",
+        "github.com",
+        "githubusercontent.com",
+        "jquery.com",
+        "jsdelivr.net",
+        "bootstrapcdn.com",
+    }
+
+    for domain in domains:
+        if domain in excluded:
+            continue
+
+        if domain.endswith(
+            (
+                ".js",
+                ".css",
             )
+        ):
+            continue
 
-        except Exception as exc:
+        record = new_record(
+            domain,
+            source,
+            port=443,
+        )
 
-            print(
-                f"[ERROR] "
-                f"{collector.__name__}: "
-                f"{exc}"
-            )
+        if record:
+            records.append(record)
 
     return records
 
 
 # ============================================================
-# 全局去重
+# Source Dispatcher
 # ============================================================
 
-def deduplicate(records):
+COLLECTORS = {
+    "vvhan": collect_vvhan,
+    "nirevil": collect_nirevil,
+    "plain_ip": collect_plain_ip,
+    "gslege": collect_gslege,
+    "zhixuanwang": collect_zhixuanwang,
+    "xinyitang": collect_xinyitang,
+    "tiancheng": collect_tiancheng,
+    "vps789": collect_vps789,
+}
 
-    database = {}
 
-    for record in records:
+def collect_source(source, config):
+    source_type = config["type"]
 
-        ip = record.get(
-            "ip"
+    collector = COLLECTORS.get(source_type)
+
+    if not collector:
+        raise RuntimeError(
+            f"unsupported source type: {source_type}"
         )
 
-        domain = record.get(
-            "domain"
-        )
-
-        key = None
-
-        if ip:
-
-            key = (
-                "ip:"
-                + ip
-            )
-
-        elif domain:
-
-            key = (
-                "domain:"
-                + domain
-            )
-
-        if not key:
-            continue
-
-        if key not in database:
-
-            database[key] = record
-
-            continue
-
-        old = database[key]
-
-        # ----------------------------------------------------
-        # 来源
-        # ----------------------------------------------------
-
-        for source in record[
-            "sources"
-        ]:
-
-            if source not in old[
-                "sources"
-            ]:
-
-                old[
-                    "sources"
-                ].append(
-                    source
-                )
-
-        # ----------------------------------------------------
-        # ISP
-        # ----------------------------------------------------
-
-        for isp in record[
-            "isp"
-        ]:
-
-            if isp not in old[
-                "isp"
-            ]:
-
-                old[
-                    "isp"
-                ].append(
-                    isp
-                )
-
-        # ----------------------------------------------------
-        # Colo
-        # ----------------------------------------------------
-
-        for colo in record[
-            "colo"
-        ]:
-
-            if colo not in old[
-                "colo"
-            ]:
-
-                old[
-                    "colo"
-                ].append(
-                    colo
-                )
-
-        # ----------------------------------------------------
-        # Region
-        # ----------------------------------------------------
-
-        for region in record[
-            "region"
-        ]:
-
-            if region not in old[
-                "region"
-            ]:
-
-                old[
-                    "region"
-                ].append(
-                    region
-                )
-
-        # ----------------------------------------------------
-        # Latency
-        # 最低值
-        # ----------------------------------------------------
-
-        latency = record.get(
-            "latency"
-        )
-
-        if latency is not None:
-
-            if old[
-                "latency"
-            ] is None:
-
-                old[
-                    "latency"
-                ] = latency
-
-            else:
-
-                old[
-                    "latency"
-                ] = min(
-                    old["latency"],
-                    latency
-                )
-
-        # ----------------------------------------------------
-        # Speed
-        # 最高值
-        # ----------------------------------------------------
-
-        speed = record.get(
-            "speed"
-        )
-
-        if speed is not None:
-
-            if old[
-                "speed"
-            ] is None:
-
-                old[
-                    "speed"
-                ] = speed
-
-            else:
-
-                old[
-                    "speed"
-                ] = max(
-                    old["speed"],
-                    speed
-                )
-
-    return list(
-        database.values()
+    return collector(
+        config,
+        source,
     )
 
 
 # ============================================================
-# 根据 Colo 推断 Region
+# Dedup
 # ============================================================
 
-def infer_region(record):
+def deduplicate(records):
+    merged = {}
 
-    if record[
-        "region"
-    ]:
+    for record in records:
+        if record.get("ip"):
+            key = (
+                "ip",
+                record["ip"],
+                record["port"],
+            )
+        elif record.get("domain"):
+            key = (
+                "domain",
+                record["domain"],
+                record["port"],
+            )
+        else:
+            continue
 
-        return
-
-    for colo in record[
-        "colo"
-    ]:
-
-        region = COLO_REGION.get(
-            colo
-        )
-
-        if region:
-
-            record[
-                "region"
-            ].append(
-                region
+        if key not in merged:
+            merged[key] = record
+        else:
+            merge_record(
+                merged[key],
+                record,
             )
 
-            return
+    return list(merged.values())
+
+
+# ============================================================
+# Region
+# ============================================================
+
+def finalize_region(record):
+    if record["region"]:
+        return
+
+    for colo in record.get("colo", []):
+        region = region_from_colo(colo)
+
+        if region:
+            record["region"].append(region)
+
+    if not record["region"]:
+        # 尝试从来源名称判断
+        text = " ".join(
+            record.get("sources", [])
+        )
+
+        region = infer_region(text)
+
+        if region:
+            record["region"].append(region)
 
 
 # ============================================================
 # Score
 # ============================================================
 
-def calculate_score(
-    record
-):
-
+def calculate_score(record):
     score = 0
 
-    latency = record.get(
-        "latency"
-    )
-
-    speed = record.get(
-        "speed"
-    )
-
-    source_count = len(
-        record.get(
-            "sources",
-            []
-        )
-    )
-
-    # --------------------------------------------------------
-    # Latency 最高 40
-    # --------------------------------------------------------
+    latency = record.get("latency")
+    speed = record.get("speed")
+    source_count = record.get("source_count", 0)
 
     if latency is not None:
-
         if latency <= 50:
-
             score += 40
-
         elif latency <= 100:
-
             score += 30
-
         elif latency <= 150:
-
             score += 20
-
         elif latency <= 200:
-
             score += 10
-
-    # --------------------------------------------------------
-    # Speed 最高 40
-    # --------------------------------------------------------
 
     if speed is not None:
-
         if speed >= 200:
-
             score += 40
-
         elif speed >= 100:
-
             score += 30
-
         elif speed >= 50:
-
             score += 20
-
         elif speed >= 10:
-
             score += 10
 
-    # --------------------------------------------------------
-    # Source Count 最高 20
-    # --------------------------------------------------------
-
     if source_count >= 5:
-
         score += 20
-
     elif source_count >= 3:
-
         score += 15
-
     elif source_count == 2:
-
         score += 10
-
     elif source_count == 1:
-
         score += 5
 
-    return min(
-        100,
-        score
-    )
+    return min(score, 100)
 
 
-# ============================================================
-# 主动 Latency 测试
-# ============================================================
-
-def test_latency(record):
-
-    ip = record.get(
-        "ip"
-    )
-
-    if not ip:
-        return record
-
-    try:
-
-        if ":" in ip:
-
-            host = f"[{ip}]"
-
-        else:
-
-            host = ip
-
-        start = time.perf_counter()
-
-        response = SESSION.get(
-            f"https://{host}/",
-            timeout=5,
-            verify=False,
-            stream=True,
+def finalize_records(records):
+    for record in records:
+        finalize_region(record)
+        record["source_count"] = len(
+            record["sources"]
         )
-
-        elapsed = (
-            time.perf_counter()
-            - start
-        ) * 1000
-
-        response.close()
-
-        if (
-            record["latency"]
-            is None
-        ):
-
-            record[
-                "latency"
-            ] = elapsed
-
-        else:
-
-            record[
-                "latency"
-            ] = min(
-                record["latency"],
-                elapsed
-            )
-
-    except Exception:
-
-        pass
-
-    return record
-
-
-def active_latency_test(
-    records
-):
-
-    if not ENABLE_ACTIVE_TEST:
-
-        print(
-            "[TEST] "
-            "active latency disabled"
+        record["score"] = calculate_score(
+            record
         )
-
-        return records
-
-    candidates = sorted(
-        records,
-        key=lambda x: (
-            -len(
-                x["sources"]
-            ),
-            x["latency"]
-            if x["latency"]
-            is not None
-            else 999999,
-        )
-    )
-
-    candidates = [
-        x for x in candidates
-        if x.get("ip")
-    ][
-        :ACTIVE_TEST_LIMIT
-    ]
-
-    print(
-        f"[TEST] "
-        f"active latency: "
-        f"{len(candidates)}"
-    )
-
-    with ThreadPoolExecutor(
-        max_workers=ACTIVE_TEST_WORKERS
-    ) as executor:
-
-        futures = [
-            executor.submit(
-                test_latency,
-                record
-            )
-            for record in candidates
-        ]
-
-        for future in as_completed(
-            futures
-        ):
-
-            try:
-
-                future.result()
-
-            except Exception:
-
-                pass
 
     return records
 
 
 # ============================================================
-# 最终整理
+# Sorting
 # ============================================================
 
-def finalize(
-    records
-):
+def sort_key(record):
+    latency = (
+        record["latency"]
+        if record["latency"] is not None
+        else 999999
+    )
 
-    for record in records:
+    speed = (
+        record["speed"]
+        if record["speed"] is not None
+        else -1
+    )
 
-        infer_region(
-            record
-        )
+    return (
+        -record["score"],
+        latency,
+        -speed,
+        record.get("ip")
+        or record.get("domain")
+        or "",
+    )
 
-        record[
-            "sources"
-        ] = sorted(
-            set(
-                record[
-                    "sources"
-                ]
+
+# ============================================================
+# Output
+# ============================================================
+
+def format_float(value):
+    if value is None:
+        return ""
+
+    if float(value).is_integer():
+        return str(int(value))
+
+    return str(round(value, 2))
+
+
+def record_to_line(record):
+    host = (
+        record["ip"]
+        if record.get("ip")
+        else record["domain"]
+    )
+
+    if record.get("ip") and record["version"] == 6:
+        host = f"[{host}]"
+
+    port = record.get("port", 443)
+
+    region = (
+        ",".join(record["region"])
+        if record["region"]
+        else "UNKNOWN"
+    )
+
+    isp = (
+        ",".join(record["isp"])
+        if record["isp"]
+        else "UNKNOWN"
+    )
+
+    colo = (
+        ",".join(record["colo"])
+        if record["colo"]
+        else "UNKNOWN"
+    )
+
+    latency = record.get("latency")
+
+    latency_text = (
+        f"{format_float(latency)}ms"
+        if latency is not None
+        else "-"
+    )
+
+    speed = record.get("speed")
+
+    speed_text = (
+        f"{format_float(speed)}mbps"
+        if speed is not None
+        else "-"
+    )
+
+    return (
+        f"{host}:{port}"
+        f"#{region}|{isp}|{colo}|"
+        f"{latency_text}|{speed_text}|"
+        f"S{record['score']}"
+    )
+
+
+def write_text(path, lines):
+    path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    with path.open(
+        "w",
+        encoding="utf-8",
+    ) as f:
+        if lines:
+            f.write(
+                "\n".join(lines)
+                + "\n"
             )
-        )
 
-        record[
-            "isp"
-        ] = sorted(
-            set(
-                record[
-                    "isp"
-                ]
-            )
-        )
 
-        record[
-            "colo"
-        ] = sorted(
-            set(
-                record[
-                    "colo"
-                ]
-            )
-        )
-
-        record[
-            "region"
-        ] = sorted(
-            set(
-                record[
-                    "region"
-                ]
-            )
-        )
-
-        record[
-            "source_count"
-        ] = len(
-            record[
-                "sources"
-            ]
-        )
-
-        if record[
-            "latency"
-        ] is not None:
-
-            record[
-                "latency"
-            ] = round(
-                float(
-                    record[
-                        "latency"
-                    ]
-                ),
-                2
-            )
-
-        if record[
-            "speed"
-        ] is not None:
-
-            record[
-                "speed"
-            ] = round(
-                float(
-                    record[
-                        "speed"
-                    ]
-                ),
-                2
-            )
-
-        record[
-            "score"
-        ] = calculate_score(
-            record
-        )
-
-    return sorted(
+def export_data(records, source_stats):
+    sorted_records = sorted(
         records,
-        key=lambda x: (
-            -x["score"],
-            x["latency"]
-            if x["latency"]
-            is not None
-            else 999999,
-        )
+        key=sort_key,
     )
 
+    ip_records = [
+        r
+        for r in sorted_records
+        if r.get("ip")
+    ]
 
-# ============================================================
-# 输出行
-# ============================================================
+    domain_records = [
+        r
+        for r in sorted_records
+        if r.get("domain")
+    ]
 
-def record_to_line(
-    record
-):
+    ipv4_records = [
+        r
+        for r in ip_records
+        if r.get("version") == 4
+    ]
 
-    ip = record.get(
-        "ip"
-    )
+    ipv6_records = [
+        r
+        for r in ip_records
+        if r.get("version") == 6
+    ]
 
-    domain = record.get(
-        "domain"
-    )
+    ip_lines = [
+        record_to_line(r)
+        for r in ip_records
+    ]
 
-    if not ip:
+    ipv4_lines = [
+        record_to_line(r)
+        for r in ipv4_records
+    ]
 
-        return domain or ""
+    ipv6_lines = [
+        record_to_line(r)
+        for r in ipv6_records
+    ]
 
-    port = record.get(
-        "port",
-        443
-    )
-
-    if ":" in ip:
-
-        endpoint = (
-            f"[{ip}]:{port}"
-        )
-
-    else:
-
-        endpoint = (
-            f"{ip}:{port}"
-        )
-
-    tags = []
-
-    if record[
-        "region"
-    ]:
-
-        tags.append(
-            "/".join(
-                record[
-                    "region"
-                ]
-            )
-        )
-
-    if record[
-        "isp"
-    ]:
-
-        tags.append(
-            "/".join(
-                record[
-                    "isp"
-                ]
-            )
-        )
-
-    if record[
-        "colo"
-    ]:
-
-        tags.append(
-            "/".join(
-                record[
-                    "colo"
-                ]
-            )
-        )
-
-    if record.get(
-        "score"
-    ) is not None:
-
-        tags.append(
-            f"S{record['score']}"
-        )
-
-    if tags:
-
-        return (
-            endpoint
-            + "#"
-            + "|".join(tags)
-        )
-
-    return endpoint
-
-
-# ============================================================
-# TXT 输出
-# ============================================================
-
-def write_txt(
-    path,
-    records
-):
-
-    path.parent.mkdir(
-        parents=True,
-        exist_ok=True
-    )
-
-    lines = []
-
-    seen = set()
-
-    for record in records:
-
-        line = record_to_line(
-            record
-        )
-
-        if not line:
-            continue
-
-        if line in seen:
-            continue
-
-        seen.add(line)
-
-        lines.append(
-            line
-        )
-
-    path.write_text(
-        "\n".join(lines)
-        + (
-            "\n"
-            if lines
-            else ""
-        ),
-        encoding="utf-8"
-    )
-
-
-# ============================================================
-# JSON 输出
-# ============================================================
-
-def write_json(
-    path,
-    data
-):
-
-    path.parent.mkdir(
-        parents=True,
-        exist_ok=True
-    )
-
-    path.write_text(
-        json.dumps(
-            data,
-            ensure_ascii=False,
-            indent=2
-        ),
-        encoding="utf-8"
-    )
-
-
-# ============================================================
-# 输出
-# ============================================================
-
-def export_data(
-    records
-):
-
-    for directory in (
-        "ip",
-        "domain",
-        "region",
-        "isp",
-        "quality",
-    ):
-
-        (
-            DATA_DIR
-            / directory
-        ).mkdir(
-            parents=True,
-            exist_ok=True
-        )
+    domain_lines = [
+        record_to_line(r)
+        for r in domain_records
+    ]
 
     # --------------------------------------------------------
     # IP
     # --------------------------------------------------------
 
-    ip_records = [
-        x for x in records
-        if x.get("ip")
-    ]
-
-    ipv4 = [
-        x for x in ip_records
-        if x["version"] == 4
-    ]
-
-    ipv6 = [
-        x for x in ip_records
-        if x["version"] == 6
-    ]
-
-    write_txt(
-        DATA_DIR
-        / "ip/all.txt",
-        ip_records
+    write_text(
+        DATA_DIR / "ip" / "all.txt",
+        ip_lines,
     )
 
-    write_txt(
-        DATA_DIR
-        / "ip/ipv4.txt",
-        ipv4
+    write_text(
+        DATA_DIR / "ip" / "ipv4.txt",
+        ipv4_lines,
     )
 
-    write_txt(
-        DATA_DIR
-        / "ip/ipv6.txt",
-        ipv6
+    write_text(
+        DATA_DIR / "ip" / "ipv6.txt",
+        ipv6_lines,
     )
 
     # --------------------------------------------------------
     # Domain
     # --------------------------------------------------------
 
-    domains = [
-        x for x in records
-        if x.get("domain")
-    ]
-
-    write_txt(
-        DATA_DIR
-        / "domain/all.txt",
-        domains
+    write_text(
+        DATA_DIR / "domain" / "all.txt",
+        domain_lines,
     )
 
-    for count in (
-        10,
-        20,
-        50,
-    ):
+    write_text(
+        DATA_DIR / "domain" / "top10.txt",
+        [
+            r["domain"]
+            for r in domain_records[:10]
+        ],
+    )
 
-        write_txt(
-            DATA_DIR
-            / f"domain/top{count}.txt",
-            domains[:count]
-        )
+    write_text(
+        DATA_DIR / "domain" / "top20.txt",
+        [
+            r["domain"]
+            for r in domain_records[:20]
+        ],
+    )
+
+    write_text(
+        DATA_DIR / "domain" / "top50.txt",
+        [
+            r["domain"]
+            for r in domain_records[:50]
+        ],
+    )
 
     # --------------------------------------------------------
     # Region
     # --------------------------------------------------------
 
-    for region in REGIONS:
+    region_records = defaultdict(list)
 
-        rows = [
-            x for x in records
-            if region in x[
-                "region"
-            ]
-        ]
+    for record in sorted_records:
+        for region in record.get(
+            "region",
+            [],
+        ):
+            region_records[region].append(
+                record
+            )
 
-        write_txt(
-            DATA_DIR
-            / "region"
-            / f"{region.lower()}.txt",
-            rows
+    for region, items in region_records.items():
+        write_text(
+            DATA_DIR / "region" / f"{region}.txt",
+            [
+                record_to_line(r)
+                for r in items
+            ],
         )
 
     # --------------------------------------------------------
     # ISP
     # --------------------------------------------------------
 
-    for isp in ISPS:
+    isp_records = defaultdict(list)
 
-        rows = [
-            x for x in records
-            if isp in x[
-                "isp"
-            ]
-        ]
+    for record in sorted_records:
+        for isp in record.get(
+            "isp",
+            [],
+        ):
+            isp_records[isp].append(
+                record
+            )
 
-        write_txt(
-            DATA_DIR
-            / "isp"
-            / f"{isp.lower()}.txt",
-            rows
+    for isp, items in isp_records.items():
+        write_text(
+            DATA_DIR / "isp" / f"{isp}.txt",
+            [
+                record_to_line(r)
+                for r in items
+            ],
         )
 
     # --------------------------------------------------------
@@ -2357,361 +1602,299 @@ def export_data(
     # --------------------------------------------------------
 
     latency100 = [
-        x for x in records
-        if (
-            x.get("latency")
-            is not None
-            and x["latency"] <= 100
-        )
+        record_to_line(r)
+        for r in sorted_records
+        if r.get("latency") is not None
+        and r["latency"] <= 100
     ]
 
     latency200 = [
-        x for x in records
-        if (
-            x.get("latency")
-            is not None
-            and x["latency"] <= 200
-        )
+        record_to_line(r)
+        for r in sorted_records
+        if r.get("latency") is not None
+        and r["latency"] <= 200
     ]
 
     speed50 = [
-        x for x in records
-        if (
-            x.get("speed")
-            is not None
-            and x["speed"] >= 50
-        )
+        record_to_line(r)
+        for r in sorted_records
+        if r.get("speed") is not None
+        and r["speed"] >= 50
     ]
 
     speed100 = [
-        x for x in records
-        if (
-            x.get("speed")
-            is not None
-            and x["speed"] >= 100
-        )
-    ]
-
-    score80 = [
-        x for x in records
-        if x["score"] >= 80
+        record_to_line(r)
+        for r in sorted_records
+        if r.get("speed") is not None
+        and r["speed"] >= 100
     ]
 
     score60 = [
-        x for x in records
-        if x["score"] >= 60
+        record_to_line(r)
+        for r in sorted_records
+        if r["score"] >= 60
     ]
 
-    write_txt(
-        DATA_DIR
-        / "quality/latency100.txt",
-        latency100
+    score80 = [
+        record_to_line(r)
+        for r in sorted_records
+        if r["score"] >= 80
+    ]
+
+    write_text(
+        DATA_DIR / "quality" / "latency100.txt",
+        latency100,
     )
 
-    write_txt(
-        DATA_DIR
-        / "quality/latency200.txt",
-        latency200
+    write_text(
+        DATA_DIR / "quality" / "latency200.txt",
+        latency200,
     )
 
-    write_txt(
-        DATA_DIR
-        / "quality/speed50.txt",
-        speed50
+    write_text(
+        DATA_DIR / "quality" / "speed50.txt",
+        speed50,
     )
 
-    write_txt(
-        DATA_DIR
-        / "quality/speed100.txt",
-        speed100
+    write_text(
+        DATA_DIR / "quality" / "speed100.txt",
+        speed100,
     )
 
-    write_txt(
-        DATA_DIR
-        / "quality/score80.txt",
-        score80
+    write_text(
+        DATA_DIR / "quality" / "score60.txt",
+        score60,
     )
 
-    write_txt(
-        DATA_DIR
-        / "quality/score60.txt",
-        score60
+    write_text(
+        DATA_DIR / "quality" / "score80.txt",
+        score80,
     )
 
     # --------------------------------------------------------
-    # Source statistics
+    # Source
     # --------------------------------------------------------
 
-    source_stats = {}
+    source_records = defaultdict(list)
 
-    for record in records:
-
-        for source in record[
-            "sources"
-        ]:
-
-            source_stats[
-                source
-            ] = (
-                source_stats.get(
-                    source,
-                    0
-                )
-                + 1
+    for record in sorted_records:
+        for source in record.get(
+            "sources",
+            [],
+        ):
+            source_records[source].append(
+                record
             )
 
-    # --------------------------------------------------------
-    # Region statistics
-    # --------------------------------------------------------
-
-    region_stats = {}
-
-    for region in REGIONS:
-
-        region_stats[
-            region
-        ] = sum(
-            region in x[
-                "region"
-            ]
-            for x in records
+    for source, items in source_records.items():
+        write_text(
+            DATA_DIR / "source" / f"{source}.txt",
+            [
+                record_to_line(r)
+                for r in items
+            ],
         )
 
     # --------------------------------------------------------
-    # ISP statistics
-    # --------------------------------------------------------
-
-    isp_stats = {}
-
-    for isp in ISPS:
-
-        isp_stats[
-            isp
-        ] = sum(
-            isp in x[
-                "isp"
-            ]
-            for x in records
-        )
-
-    # --------------------------------------------------------
-    # Quality statistics
-    # --------------------------------------------------------
-
-    quality = {
-
-        "latency100":
-            len(latency100),
-
-        "latency200":
-            len(latency200),
-
-        "speed50":
-            len(speed50),
-
-        "speed100":
-            len(speed100),
-
-        "score80":
-            len(score80),
-
-        "score60":
-            len(score60),
-
-    }
-
-    # --------------------------------------------------------
-    # Index
+    # index.json
     # --------------------------------------------------------
 
     index = {
-
-        "name":
-            "CFEdge Collector",
-
-        "version":
-            "1.0.0",
-
-        "generated_at":
-            time.strftime(
-                "%Y-%m-%dT%H:%M:%SZ",
-                time.gmtime()
-            ),
-
-        "total":
-            len(records),
-
-        "ipv4":
-            len(ipv4),
-
-        "ipv6":
-            len(ipv6),
-
-        "domains":
-            len(domains),
-
-        "sources":
-            source_stats,
-
-        "regions":
-            region_stats,
-
-        "isp":
-            isp_stats,
-
-        "quality":
-            quality,
-
-        "records":
-            records,
-
+        "generated_at": now_iso(),
+        "total": len(sorted_records),
+        "ipv4": len(ipv4_records),
+        "ipv6": len(ipv6_records),
+        "domains": len(domain_records),
+        "records": sorted_records,
+        "sources": source_stats,
     }
 
-    write_json(
-        DATA_DIR
-        / "index.json",
-        index
-    )
+    with (
+        DATA_DIR / "index.json"
+    ).open(
+        "w",
+        encoding="utf-8",
+    ) as f:
+        json.dump(
+            index,
+            f,
+            ensure_ascii=False,
+            indent=2,
+        )
 
-    # 单独输出轻量统计文件
-    write_json(
-        DATA_DIR
-        / "stats.json",
-        {
-            "generated_at":
-                index[
-                    "generated_at"
-                ],
+    # --------------------------------------------------------
+    # stats.json
+    # --------------------------------------------------------
 
-            "total":
-                len(records),
+    stats = {
+        "generated_at": now_iso(),
+        "total": len(sorted_records),
+        "ipv4": len(ipv4_records),
+        "ipv6": len(ipv6_records),
+        "domains": len(domain_records),
+        "score": {
+            "gte_80": len(score80),
+            "gte_60": len(score60),
+        },
+        "quality": {
+            "latency_lte_100": len(latency100),
+            "latency_lte_200": len(latency200),
+            "speed_gte_50": len(speed50),
+            "speed_gte_100": len(speed100),
+        },
+        "sources": source_stats,
+    }
 
-            "ipv4":
-                len(ipv4),
-
-            "ipv6":
-                len(ipv6),
-
-            "domains":
-                len(domains),
-
-            "sources":
-                source_stats,
-
-            "regions":
-                region_stats,
-
-            "isp":
-                isp_stats,
-
-            "quality":
-                quality,
-        }
-    )
+    with (
+        DATA_DIR / "stats.json"
+    ).open(
+        "w",
+        encoding="utf-8",
+    ) as f:
+        json.dump(
+            stats,
+            f,
+            ensure_ascii=False,
+            indent=2,
+        )
 
 
 # ============================================================
-# 主程序
+# Main
 # ============================================================
 
 def main():
+    start_time = time.time()
+
+    ensure_dirs()
+
+    print("=" * 70)
+    print("CFEdge Collector")
+    print("=" * 70)
+    print(
+        f"Time: {now_iso()}"
+    )
+    print(
+        f"HTTP_TIMEOUT: {HTTP_TIMEOUT}"
+    )
+    print(
+        f"ACTIVE_TEST: {ENABLE_ACTIVE_TEST}"
+    )
+    print("=" * 70)
+
+    all_records = []
+
+    source_stats = {}
+
+    for source, config in SOURCES.items():
+        if not config.get("enabled", True):
+            continue
+
+        print()
+        print(
+            f"[SOURCE] {source}"
+        )
+
+        started = time.time()
+
+        try:
+            records = collect_source(
+                source,
+                config,
+            )
+
+            source_stats[source] = {
+                "status": "ok",
+                "type": config["type"],
+                "url": config["url"],
+                "records": len(records),
+                "elapsed": round(
+                    time.time() - started,
+                    2,
+                ),
+            }
+
+            all_records.extend(records)
+
+            print(
+                f"[OK] {source}: "
+                f"{len(records)} records"
+            )
+
+        except Exception as exc:
+            source_stats[source] = {
+                "status": "error",
+                "type": config["type"],
+                "url": config["url"],
+                "records": 0,
+                "error": str(exc),
+                "elapsed": round(
+                    time.time() - started,
+                    2,
+                ),
+            }
+
+            print(
+                f"[ERROR] {source}: {exc}"
+            )
 
     print()
+    print("=" * 70)
     print(
-        "=" * 60
+        f"Raw records: {len(all_records)}"
     )
 
-    print(
-        "CFEdge Collector"
-    )
-
-    print(
-        "=" * 60
-    )
-
-    # --------------------------------------------------------
-    # 采集
-    # --------------------------------------------------------
-
-    raw_records = collect_all()
-
-    print()
-    print(
-        f"[COLLECT] "
-        f"raw = {len(raw_records)}"
-    )
-
-    # --------------------------------------------------------
-    # 去重
-    # --------------------------------------------------------
-
-    unique_records = deduplicate(
-        raw_records
+    records = deduplicate(
+        all_records
     )
 
     print(
-        f"[DEDUP] "
-        f"unique = {len(unique_records)}"
+        f"After dedup: {len(records)}"
     )
 
-    # --------------------------------------------------------
-    # 主动测试
-    # --------------------------------------------------------
-
-    unique_records = active_latency_test(
-        unique_records
+    records = finalize_records(
+        records
     )
 
-    # --------------------------------------------------------
-    # 最终整理
-    # --------------------------------------------------------
-
-    final_records = finalize(
-        unique_records
-    )
-
-    # --------------------------------------------------------
-    # 输出
-    # --------------------------------------------------------
+    # 防止某一个来源全部为空导致整个输出完全没有信息
+    if not records:
+        print(
+            "[WARN] No records collected."
+        )
 
     export_data(
-        final_records
+        records,
+        source_stats,
     )
 
-    print()
-    print(
-        "=" * 60
-    )
+    elapsed = time.time() - start_time
 
+    print("=" * 70)
     print(
-        f"TOTAL   : {len(final_records)}"
-    )
-
-    print(
-        "IPv4    : "
-        f"{sum(x['version'] == 4 for x in final_records)}"
+        f"Finished in {elapsed:.2f}s"
     )
 
     print(
-        "IPv6    : "
-        f"{sum(x['version'] == 6 for x in final_records)}"
+        f"Total: {len(records)}"
     )
 
     print(
-        "Score>=80: "
-        f"{sum(x['score'] >= 80 for x in final_records)}"
+        f"IPv4: "
+        f"{sum(1 for r in records if r.get('version') == 4)}"
     )
 
     print(
-        "Score>=60: "
-        f"{sum(x['score'] >= 60 for x in final_records)}"
+        f"IPv6: "
+        f"{sum(1 for r in records if r.get('version') == 6)}"
     )
 
     print(
-        "=" * 60
+        f"Domain: "
+        f"{sum(1 for r in records if r.get('domain'))}"
     )
+
+    print("=" * 70)
 
 
 if __name__ == "__main__":
-
     main()
